@@ -4,7 +4,35 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCL-90 心理健康测评</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 多 CDN 自动回退加载 Chart.js -->
+    <script>
+        (function() {
+            // 按优先级列出 CDN 地址
+            var scripts = [
+                'https://cdn.jsdelivr.net/npm/chart.js',
+                'https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.0/chart.umd.js',
+                'https://cdn.staticfile.org/Chart.js/4.4.0/chart.umd.js',
+                'https://npm.elemecdn.com/chart.js@4.4.0/dist/chart.umd.js'
+            ];
+            function loadNext(index) {
+                if (index >= scripts.length) {
+                    console.error('所有 Chart.js CDN 均加载失败，雷达图将无法显示');
+                    return;
+                }
+                var script = document.createElement('script');
+                script.src = scripts[index];
+                script.onload = function() {
+                    console.log('Chart.js 成功加载：', scripts[index]);
+                };
+                script.onerror = function() {
+                    console.warn('加载失败，尝试下一个 CDN：', scripts[index]);
+                    loadNext(index + 1);
+                };
+                document.head.appendChild(script);
+            }
+            loadNext(0);
+        })();
+    </script>
     <style>
         /* --- 精简移动优先主题 --- */
         :root {
@@ -383,6 +411,33 @@
         let userCode = null;
         let deviceId = null;
         
+        // ==================== 安全存储函数（解决隐私模式问题） ====================
+        function safeGet(key) {
+            try {
+                return localStorage.getItem(key);
+            } catch (e) {
+                console.warn('localStorage 读取失败（可能是隐私模式）:', e);
+                return null;
+            }
+        }
+        function safeSet(key, value) {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch (e) {
+                console.warn('localStorage 写入失败（可能是隐私模式）:', e);
+                return false;
+            }
+        }
+        // 检测存储是否可用
+        let storageAvailable = true;
+        try {
+            localStorage.setItem('__test__', '1');
+            localStorage.removeItem('__test__');
+        } catch (e) {
+            storageAvailable = false;
+        }
+        
         // ==================== 设备ID和兑换码管理 ====================
         
         // 生成设备ID（基于浏览器指纹）
@@ -426,10 +481,13 @@
         function initCode() {
             deviceId = generateDeviceId();
             
-            // 检查是否已有有效的兑换码
-            const savedCode = localStorage.getItem(`${APP_NAME}_code`);
-            const savedTime = localStorage.getItem(`${APP_NAME}_code_time`);
-            const savedDevice = localStorage.getItem(`${APP_NAME}_device`);
+            // 检查是否已有有效的兑换码（仅当存储可用时）
+            let savedCode = null, savedTime = null, savedDevice = null;
+            if (storageAvailable) {
+                savedCode = safeGet(`${APP_NAME}_code`);
+                savedTime = safeGet(`${APP_NAME}_code_time`);
+                savedDevice = safeGet(`${APP_NAME}_device`);
+            }
             
             const now = Date.now();
             const oneDay = 24 * 60 * 60 * 1000;
@@ -448,14 +506,18 @@
             setTimeout(() => {
                 userCode = generateVerificationCode();
                 
-                // 保存到localStorage
-                localStorage.setItem(`${APP_NAME}_code`, userCode);
-                localStorage.setItem(`${APP_NAME}_code_time`, now.toString());
-                localStorage.setItem(`${APP_NAME}_device`, deviceId);
+                // 仅在存储可用时保存
+                if (storageAvailable) {
+                    safeSet(`${APP_NAME}_code`, userCode);
+                    safeSet(`${APP_NAME}_code_time`, now.toString());
+                    safeSet(`${APP_NAME}_device`, deviceId);
+                } else {
+                    // 隐私模式下提示用户
+                    console.log('隐私模式下无法保存兑换码，刷新页面后将失效');
+                }
                 
-                // 显示兑换码
                 showGeneratedCode();
-            }, 2000); // 延迟2秒显示，让用户有生成的感觉
+            }, 2000);
         }
         
         // 显示生成的兑换码
@@ -490,19 +552,28 @@
             if (existingSection && existingCodeElem) {
                 existingCodeElem.textContent = userCode;
                 existingSection.style.display = 'block';
-            }
-            
-            // 计算剩余时间
-            const savedTime = parseInt(localStorage.getItem(`${APP_NAME}_code_time`), 10);
-            const now = Date.now();
-            const remainingTime = 24 * 60 * 60 * 1000 - (now - savedTime);
-            const remainingHours = Math.floor(remainingTime / (60 * 60 * 1000));
-            
-            if (remainingHours > 0) {
-                const info = document.createElement('div');
-                info.style.cssText = 'font-size: 13px; color: var(--primary-green); margin-top: 8px;';
-                info.textContent = `剩余有效时间: ${remainingHours}小时`;
-                existingCodeElem.parentNode.appendChild(info);
+                
+                // 计算剩余时间（仅当存储可用且能读取到时间）
+                if (storageAvailable) {
+                    const savedTime = safeGet(`${APP_NAME}_code_time`);
+                    if (savedTime) {
+                        const now = Date.now();
+                        const remainingTime = 24 * 60 * 60 * 1000 - (now - parseInt(savedTime, 10));
+                        const remainingHours = Math.floor(remainingTime / (60 * 60 * 1000));
+                        if (remainingHours > 0) {
+                            const info = document.createElement('div');
+                            info.style.cssText = 'font-size: 13px; color: var(--primary-green); margin-top: 8px;';
+                            info.textContent = `剩余有效时间: ${remainingHours}小时`;
+                            existingCodeElem.parentNode.appendChild(info);
+                        }
+                    }
+                } else {
+                    // 存储不可用，提示有效期限制
+                    const info = document.createElement('div');
+                    info.style.cssText = 'font-size: 13px; color: var(--warning-color); margin-top: 8px;';
+                    info.textContent = '隐私模式下无法保存有效期，刷新后需重新获取码';
+                    existingCodeElem.parentNode.appendChild(info);
+                }
             }
         }
         
@@ -935,6 +1006,13 @@
         function drawRadarChart(factorDetails) {
             const canvas = document.getElementById('radarChart');
             if (!canvas) return;
+            
+            // 如果 Chart 还没加载好，等待一段时间再试
+            if (typeof Chart === 'undefined') {
+                console.warn('Chart.js 尚未加载，等待重试...');
+                setTimeout(() => drawRadarChart(factorDetails), 500);
+                return;
+            }
             
             const ctx = canvas.getContext('2d');
             
